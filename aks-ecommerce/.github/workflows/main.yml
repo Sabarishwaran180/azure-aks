@@ -257,13 +257,17 @@ jobs:
               -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           done
 
-          # ConfigMaps
-          for SVC in api-gateway user-service product-service order-service payment-service notification-service; do
-            kubectl create configmap ${SVC}-config \
-              -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
-          done
-          kubectl create configmap fluent-bit-config \
-            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          # Apply actual service ConfigMaps with namespace patching (production → test)
+          sed \
+            -e "s|namespace: production|namespace: ${{ env.NAMESPACE }}|g" \
+            -e "s|\.production\.svc\.cluster\.local|.${{ env.NAMESPACE }}.svc.cluster.local|g" \
+            aks-ecommerce/configmaps/app-configs.yaml | \
+          kubectl apply -f -
+          sed \
+            -e "s|namespace: production|namespace: ${{ env.NAMESPACE }}|g" \
+            aks-ecommerce/configmaps/fluent-bit-configmap.yaml | \
+          kubectl apply -f -
+          # Override frontend-config with the port-8080 nginx.conf (non-root safe)
           kubectl create configmap frontend-config \
             --from-file=nginx.conf=aks-ecommerce/services/frontend/nginx.conf \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
@@ -319,6 +323,11 @@ jobs:
               -e "s|whenUnsatisfiable: DoNotSchedule|whenUnsatisfiable: ScheduleAnyway|g" | \
             kubectl apply -n ${{ env.NAMESPACE }} -f -
           done
+          # api-gateway has a separate service.yaml (not embedded in deployment.yaml)
+          sed \
+            -e "s|namespace: production|namespace: ${{ env.NAMESPACE }}|g" \
+            aks-ecommerce/services/api-gateway/service.yaml | \
+          kubectl apply -n ${{ env.NAMESPACE }} -f -
 
       # ── Wait for all deployments to be ready ───────────
       - name: Wait for rollouts

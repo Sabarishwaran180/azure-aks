@@ -147,7 +147,7 @@ data:
       gzip on;
       gzip_types text/plain application/json application/javascript text/css;
       server {
-        listen       80;
+        listen       8080;
         server_name  _;
         root   /usr/share/nginx/html;
         index  index.html;
