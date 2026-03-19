@@ -1,0 +1,275 @@
+# ============================================================
+# alertrules.yaml
+# Custom Prometheus AlertRules for the e-commerce platform.
+# Applied as PrometheusRule CRDs (picked up by kube-prometheus-stack).
+# ============================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ecommerce-alert-rules
+  namespace: monitoring
+  labels:
+    # These labels make Prometheus pick up this rule
+    release: prometheus
+    app: kube-prometheus-stack
+spec:
+  groups:
+
+  # ── Service Availability ───────────────────────────────
+  - name: service-availability
+    interval: 30s
+    rules:
+    - alert: ServiceDown
+      expr: |
+        up{namespace="production"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service {{ $labels.job }} is DOWN"
+        description: "Service {{ $labels.job }} in namespace {{ $labels.namespace }} has been down for more than 1 minute."
+        runbook: "https://wiki.yourdomain.com/runbooks/service-down"
+
+    - alert: PodCrashLooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total{namespace="production"}[5m]) * 60 > 5
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod {{ $labels.pod }} is crash looping"
+        description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} restarted {{ $value | printf \"%.0f\" }} times in the last 5 minutes."
+
+    - alert: PodNotReady
+      expr: |
+        kube_pod_status_ready{condition="true", namespace="production"} == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod {{ $labels.pod }} is not ready"
+        description: "Pod {{ $labels.pod }} has been not ready for more than 5 minutes."
+
+    - alert: DeploymentReplicasMismatch
+      expr: |
+        kube_deployment_spec_replicas{namespace="production"}
+          != kube_deployment_status_available_replicas{namespace="production"}
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Deployment {{ $labels.deployment }} has mismatched replicas"
+        description: "Deployment {{ $labels.deployment }} wants {{ $value }} replicas but has fewer available."
+
+  # ── Resource Usage ────────────────────────────────────
+  - name: resource-usage
+    interval: 60s
+    rules:
+    - alert: HighCPUUsage
+      expr: |
+        (
+          sum(rate(container_cpu_usage_seconds_total{namespace="production", container!=""}[5m])) by (pod, container)
+          /
+          sum(kube_pod_container_resource_limits{namespace="production", resource="cpu"}) by (pod, container)
+        ) * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage in pod {{ $labels.pod }}"
+        description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using {{ $value | printf \"%.1f\" }}% of its CPU limit."
+
+    - alert: HighMemoryUsage
+      expr: |
+        (
+          sum(container_memory_working_set_bytes{namespace="production", container!=""}) by (pod, container)
+          /
+          sum(kube_pod_container_resource_limits{namespace="production", resource="memory"}) by (pod, container)
+        ) * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage in pod {{ $labels.pod }}"
+        description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using {{ $value | printf \"%.1f\" }}% of its memory limit."
+
+    - alert: OOMKilled
+      expr: |
+        kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace="production"} == 1
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Container {{ $labels.container }} OOMKilled"
+        description: "Container {{ $labels.container }} in pod {{ $labels.pod }} was OOMKilled. Increase memory limits."
+
+    - alert: PersistentVolumeFull
+      expr: |
+        (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) * 100 < 15
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "PersistentVolume {{ $labels.persistentvolumeclaim }} is almost full"
+        description: "PVC {{ $labels.persistentvolumeclaim }} has only {{ $value | printf \"%.1f\" }}% space remaining."
+
+    - alert: PersistentVolumeCritical
+      expr: |
+        (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) * 100 < 5
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "PersistentVolume {{ $labels.persistentvolumeclaim }} is critically full"
+        description: "PVC {{ $labels.persistentvolumeclaim }} has only {{ $value | printf \"%.1f\" }}% space left. IMMEDIATE ACTION REQUIRED."
+
+  # ── Business Metrics ──────────────────────────────────
+  - name: business-metrics
+    interval: 60s
+    rules:
+    - alert: HighPaymentFailureRate
+      expr: |
+        (
+          rate(payments_total{status="failed"}[5m])
+          /
+          rate(payments_total[5m])
+        ) * 100 > 10
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High payment failure rate"
+        description: "Payment failure rate is {{ $value | printf \"%.1f\" }}% over the last 5 minutes. Investigate payment-service and Stripe."
+
+    - alert: OrderCreationSpike
+      expr: |
+        rate(orders_created_total[5m]) > 100
+      for: 2m
+      labels:
+        severity: info
+      annotations:
+        summary: "High order creation rate"
+        description: "Orders being created at {{ $value | printf \"%.0f\" }}/s — potential flash sale or bot traffic."
+
+    - alert: NotificationQueueBacklog
+      expr: |
+        rabbitmq_queue_depth{queue="order.created"} > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Notification queue backlog is high"
+        description: "RabbitMQ order.created queue has {{ $value | printf \"%.0f\" }} messages. KEDA should be scaling notification-service."
+
+    - alert: CacheHitRateLow
+      expr: |
+        (
+          rate(product_cache_hits_total[5m])
+          /
+          (rate(product_cache_hits_total[5m]) + rate(product_cache_misses_total[5m]))
+        ) * 100 < 50
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Product cache hit rate is low"
+        description: "Redis cache hit rate for products is {{ $value | printf \"%.1f\" }}%. Consider increasing TTL or cache size."
+
+  # ── API Performance ───────────────────────────────────
+  - name: api-performance
+    interval: 30s
+    rules:
+    - alert: HighAPILatency
+      expr: |
+        histogram_quantile(0.99,
+          rate(http_request_duration_seconds_bucket{namespace="production"}[5m])
+        ) > 2
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High API latency on {{ $labels.job }}"
+        description: "P99 latency for {{ $labels.job }} is {{ $value | printf \"%.2f\" }}s (threshold: 2s)."
+
+    - alert: HighErrorRate
+      expr: |
+        (
+          rate(http_requests_total{status_code=~"5..", namespace="production"}[5m])
+          /
+          rate(http_requests_total{namespace="production"}[5m])
+        ) * 100 > 5
+      for: 3m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High HTTP 5xx error rate on {{ $labels.app }}"
+        description: "Service {{ $labels.app }} has {{ $value | printf \"%.1f\" }}% 5xx error rate over the last 5 minutes."
+
+  # ── Database Health ───────────────────────────────────
+  - name: database-health
+    interval: 60s
+    rules:
+    - alert: PostgreSQLDown
+      expr: |
+        pg_up == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "PostgreSQL is DOWN"
+        description: "PostgreSQL instance is unreachable. All services depending on it will fail."
+
+    - alert: PostgreSQLHighConnections
+      expr: |
+        pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "PostgreSQL connection pool near limit"
+        description: "PostgreSQL is using {{ $value | printf \"%.1f\" }}% of max connections."
+
+    - alert: RedisMemoryHigh
+      expr: |
+        redis_memory_used_bytes / redis_config_maxmemory * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Redis memory usage is high"
+        description: "Redis is using {{ $value | printf \"%.1f\" }}% of its max memory. Evictions may start."
+
+    - alert: RabbitMQUnackedMessages
+      expr: |
+        rabbitmq_queue_messages_unacked > 500
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "RabbitMQ has many unacknowledged messages"
+        description: "Queue {{ $labels.queue }} has {{ $value | printf \"%.0f\" }} unacknowledged messages. Consumer may be stuck."
+
+  # ── Node / Infrastructure ─────────────────────────────
+  - name: infrastructure
+    interval: 60s
+    rules:
+    - alert: NodeNotReady
+      expr: |
+        kube_node_status_condition{condition="Ready", status="true"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Node {{ $labels.node }} is NotReady"
+        description: "Kubernetes node {{ $labels.node }} has been NotReady for 5 minutes. Cluster autoscaler may not scale correctly."
+
+    - alert: NodeHighDiskPressure
+      expr: |
+        kube_node_status_condition{condition="DiskPressure", status="true"} == 1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Node {{ $labels.node }} has DiskPressure"
+        description: "Node {{ $labels.node }} is experiencing disk pressure. Pods may be evicted."

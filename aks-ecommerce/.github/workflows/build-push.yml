@@ -1,0 +1,175 @@
+# ============================================================
+# build-push.yml
+# Builds all service Docker images, scans them with Trivy,
+# and pushes to Azure Container Registry.
+#
+# Triggers:  push to main / release/*
+#            pull_request to main (build + scan only, no push)
+#            workflow_dispatch (manual run)
+#
+# Required GitHub Secrets:
+#   ACR_LOGIN_SERVER — e.g. acrecommerceprodic9b.azurecr.io
+#   ACR_USERNAME     — ACR admin username (= ACR name, from: az acr credential show)
+#   ACR_PASSWORD     — ACR admin password (from: az acr credential show)
+#
+# Required GitHub Variables (non-secret):
+#   SERVICES         — space-separated list of service names
+# ============================================================
+
+name: Build & Push Images
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "terraform/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: "Push images to ACR (true/false)"
+        required: false
+        default: "true"
+
+env:
+  SERVICES: >-
+    api-gateway
+    user-service
+    product-service
+    order-service
+    payment-service
+    notification-service
+    frontend
+
+jobs:
+  # ── Build each service in parallel ─────────────────────
+  build:
+    name: "Build ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        service:
+          - api-gateway
+          - user-service
+          - product-service
+          - order-service
+          - payment-service
+          - notification-service
+          - frontend
+      fail-fast: false  # let all services build even if one fails
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── ACR admin credentials login ─────────────────────
+      - name: Login to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # ── Set image tag: short SHA on push, PR number on PR
+      - name: Set image tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "value=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.run_number }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Build (skip if Dockerfile missing) ─────────────
+      - name: Build ${{ matrix.service }}
+        id: build
+        run: |
+          SERVICE_PATH="aks-ecommerce/services/${{ matrix.service }}"
+          if [ ! -f "$SERVICE_PATH/Dockerfile" ]; then
+            echo "No Dockerfile found for ${{ matrix.service }}, skipping."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REGISTRY="${{ secrets.ACR_LOGIN_SERVER }}"
+          IMAGE="$REGISTRY/${{ matrix.service }}"
+          docker build \
+            -t "$IMAGE:${{ steps.tag.outputs.value }}" \
+            -t "$IMAGE:latest" \
+            "$SERVICE_PATH/"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      # ── Trivy vulnerability scan ────────────────────────
+      - name: Trivy scan — ${{ matrix.service }}
+        if: steps.build.outputs.skipped == 'false'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "${{ steps.build.outputs.image }}:${{ steps.tag.outputs.value }}"
+          format: "table"
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+
+      # ── Push only on push events (not PRs) ─────────────
+      - name: Push ${{ matrix.service }}
+        if: |
+          steps.build.outputs.skipped == 'false' &&
+          github.event_name != 'pull_request' &&
+          (github.event_name != 'workflow_dispatch' || inputs.push_images == 'true')
+        run: |
+          IMAGE="${{ steps.build.outputs.image }}"
+          docker push "$IMAGE:${{ steps.tag.outputs.value }}"
+          docker push "$IMAGE:latest"
+          echo "✅ Pushed $IMAGE:${{ steps.tag.outputs.value }}"
+
+  # ── Lint Kubernetes manifests ───────────────────────────
+  lint-manifests:
+    name: "Lint K8s Manifests"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -Lo kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate YAML manifests
+        run: |
+          find aks-ecommerce -name "*.yaml" \
+            -not -path "*/terraform/*" \
+            -not -path "*kustomization*" | \
+            xargs kubeconform \
+              -strict \
+              -ignore-missing-schemas \
+              -summary
+
+      - name: Helm lint
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          if [ -f "aks-ecommerce/Chart.yaml" ]; then
+            helm lint aks-ecommerce/
+          else
+            echo "No Helm chart found at aks-ecommerce/, skipping."
+          fi
+
+  # ── Gate: all matrix jobs must pass ────────────────────
+  build-complete:
+    name: "All images built"
+    runs-on: ubuntu-latest
+    needs: [build, lint-manifests]
+    steps:
+      - run: echo "All build jobs passed ✅"

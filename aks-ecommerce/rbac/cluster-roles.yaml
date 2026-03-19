@@ -1,0 +1,134 @@
+# ============================================================
+# cluster-roles.yaml
+# RBAC: Roles, ClusterRoles, RoleBindings
+# Principle: each service only gets the permissions it needs
+# ============================================================
+
+# ── Role: API Gateway (needs to read configmaps/secrets in namespace) ──
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-gateway-role
+  namespace: production
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-gateway-rolebinding
+  namespace: production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: api-gateway-role
+subjects:
+- kind: ServiceAccount
+  name: api-gateway-sa
+  namespace: production
+---
+# ── Role: Read-only for application services ──────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-readonly-role
+  namespace: production
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+# Bind read-only role to all app service accounts
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-readonly-rolebinding
+  namespace: production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: app-readonly-role
+subjects:
+- kind: ServiceAccount
+  name: user-service-sa
+  namespace: production
+- kind: ServiceAccount
+  name: product-service-sa
+  namespace: production
+- kind: ServiceAccount
+  name: order-service-sa
+  namespace: production
+- kind: ServiceAccount
+  name: payment-service-sa
+  namespace: production
+- kind: ServiceAccount
+  name: notification-service-sa
+  namespace: production
+---
+# ── ClusterRole: Monitoring (Prometheus needs cluster-wide read) ──
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-monitoring-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions", "networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-monitoring-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-monitoring-role
+subjects:
+- kind: ServiceAccount
+  name: prometheus-kube-prometheus-prometheus
+  namespace: monitoring
+---
+# ── ClusterRole: Developer read-only (for kubectl access) ──
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: developer-readonly
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "services", "deployments",
+              "configmaps", "events", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+---
+# ── ClusterRoleBinding: Bind developer group ──────────────
+# Replace with your actual AAD group object ID
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: developer-readonly-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: developer-readonly
+subjects:
+- kind: Group
+  name: "<aad-developer-group-object-id>"
+  apiGroup: rbac.authorization.k8s.io

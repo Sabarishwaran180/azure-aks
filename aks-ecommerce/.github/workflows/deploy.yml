@@ -1,0 +1,278 @@
+# ============================================================
+# deploy.yml
+# Deploys Kubernetes manifests to AKS.
+# Flow:  staging deploy → smoke tests → manual approval → production deploy
+#
+# Triggers:
+#   workflow_run  — auto-triggered when build-push.yml completes on main
+#   workflow_dispatch — manual deploy of any build number
+#
+# Required GitHub Secrets:
+#   AZURE_CLIENT_ID       — OIDC federated credential client ID
+#   AZURE_TENANT_ID       — Azure AD tenant ID
+#   AZURE_SUBSCRIPTION_ID — Azure subscription ID
+#   ACR_NAME              — e.g. acrecommerceprodic9b
+#
+# Required GitHub Variables:
+#   CLUSTER_NAME          — e.g. aks-ecommerce-test
+#   RESOURCE_GROUP        — e.g. rg-ecommerce-test
+#
+# GitHub Environments required (Settings → Environments):
+#   staging    — no protection rules
+#   production — add "Required reviewers" for manual approval gate
+# ============================================================
+
+name: Deploy to AKS
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Images"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (run_number-sha)"
+        required: true
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+
+env:
+  SERVICES: >-
+    api-gateway
+    user-service
+    product-service
+    order-service
+    payment-service
+    notification-service
+    frontend
+
+# ══════════════════════════════════════════════════════════
+# STAGE 1 — Deploy to Staging
+# ══════════════════════════════════════════════════════════
+jobs:
+  deploy-staging:
+    name: "Deploy → Staging"
+    runs-on: ubuntu-latest
+    # Skip if triggered by a failed build
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      NAMESPACE: staging
+      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.workflow_run.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.CLUSTER_NAME }}
+
+      # ── Base infrastructure manifests ──────────────────
+      - name: Apply base infrastructure
+        run: |
+          kubectl apply -f aks-ecommerce/namespaces/namespaces.yaml
+          kubectl apply -f aks-ecommerce/rbac/
+          kubectl apply -f aks-ecommerce/configmaps/
+          kubectl apply -f aks-ecommerce/storage/
+          kubectl apply -f aks-ecommerce/databases/
+
+      # ── Deploy each service ────────────────────────────
+      - name: Deploy services to staging
+        run: |
+          REGISTRY="${{ secrets.ACR_NAME }}.azurecr.io"
+          for SERVICE in ${{ env.SERVICES }}; do
+            MANIFEST="aks-ecommerce/services/$SERVICE/deployment.yaml"
+            if [ ! -f "$MANIFEST" ]; then
+              echo "⚠️  No deployment.yaml for $SERVICE, skipping."
+              continue
+            fi
+            echo "=== Deploying $SERVICE to ${{ env.NAMESPACE }} ==="
+
+            # Patch image tag and namespace inline (no file mutation)
+            sed \
+              -e "s|image:.*/$SERVICE:.*|image: $REGISTRY/$SERVICE:${{ env.IMAGE_TAG }}|g" \
+              -e "s|namespace: production|namespace: ${{ env.NAMESPACE }}|g" \
+              "$MANIFEST" | kubectl apply -n ${{ env.NAMESPACE }} -f -
+
+            kubectl rollout status deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} --timeout=300s
+          done
+
+  # ══════════════════════════════════════════════════════
+  # STAGE 2 — Smoke Tests
+  # ══════════════════════════════════════════════════════
+  smoke-tests:
+    name: "Smoke Tests (Staging)"
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      NAMESPACE: staging
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.CLUSTER_NAME }}
+
+      - name: Wait for pods to stabilise
+        run: |
+          echo "Waiting 30s for pods to stabilise..."
+          sleep 30
+
+      - name: Check all deployments are healthy
+        run: |
+          FAILED=0
+          for SERVICE in ${{ env.SERVICES }}; do
+            READY=$(kubectl get deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} \
+              -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+            DESIRED=$(kubectl get deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} \
+              -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+            if [ "${READY:-0}" -ge "$DESIRED" ]; then
+              echo "✅ $SERVICE — $READY/$DESIRED ready"
+            else
+              echo "❌ $SERVICE — $READY/$DESIRED ready"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+          [ $FAILED -eq 0 ] || exit 1
+
+      - name: Test internal service health endpoints
+        run: |
+          for SERVICE in ${{ env.SERVICES }}; do
+            POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+              -l app=$SERVICE \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [ -n "$POD" ]; then
+              echo "Testing $SERVICE health..."
+              kubectl exec "$POD" -n ${{ env.NAMESPACE }} -- \
+                wget -qO- http://localhost:3000/health 2>/dev/null && \
+                echo "✅ $SERVICE health OK" || \
+                echo "⚠️  $SERVICE health endpoint not responding (non-fatal)"
+            fi
+          done
+
+  # ══════════════════════════════════════════════════════
+  # STAGE 3 — Deploy to Production
+  #   Manual approval gate is enforced via the "production"
+  #   GitHub Environment (Settings → Environments → production
+  #   → Required reviewers).
+  # ══════════════════════════════════════════════════════
+  deploy-production:
+    name: "Deploy → Production"
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    # Only deploy to production on main branch push, not manual staging-only deploys
+    if: |
+      github.event_name == 'workflow_run' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    environment: production          # ← triggers manual approval gate
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      NAMESPACE: production
+      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.workflow_run.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.CLUSTER_NAME }}
+
+      # ── Rolling deploy (kubectl set image — zero downtime)
+      - name: Rolling deploy all services
+        id: deploy
+        run: |
+          REGISTRY="${{ secrets.ACR_NAME }}.azurecr.io"
+          for SERVICE in ${{ env.SERVICES }}; do
+            MANIFEST="aks-ecommerce/services/$SERVICE/deployment.yaml"
+            if [ ! -f "$MANIFEST" ]; then
+              echo "⚠️  No deployment.yaml for $SERVICE, skipping."
+              continue
+            fi
+            echo "=== Deploying $SERVICE to production ==="
+            kubectl set image deployment/$SERVICE \
+              $SERVICE=$REGISTRY/$SERVICE:${{ env.IMAGE_TAG }} \
+              -n ${{ env.NAMESPACE }}
+            kubectl rollout status deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} --timeout=300s
+          done
+
+      # ── Apply supporting resources ─────────────────────
+      - name: Apply autoscaling, PDBs, ingress, network policies
+        run: |
+          kubectl apply -f aks-ecommerce/autoscaling/      -n ${{ env.NAMESPACE }}
+          kubectl apply -f aks-ecommerce/pod-disruption-budgets/ -n ${{ env.NAMESPACE }}
+          kubectl apply -f aks-ecommerce/ingress/          -n ${{ env.NAMESPACE }}
+          kubectl apply -f aks-ecommerce/network-policies/ -n ${{ env.NAMESPACE }}
+
+      # ── Auto-rollback if any deployment is unhealthy ───
+      - name: Verify health — auto-rollback on failure
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: |
+          echo "⚠️  Deploy failed — initiating rollback..."
+          for SERVICE in ${{ env.SERVICES }}; do
+            READY=$(kubectl get deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} \
+              -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+            DESIRED=$(kubectl get deployment/$SERVICE \
+              -n ${{ env.NAMESPACE }} \
+              -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+            if [ "${READY:-0}" -lt "$DESIRED" ]; then
+              echo "🔁 Rolling back $SERVICE..."
+              kubectl rollout undo deployment/$SERVICE -n ${{ env.NAMESPACE }}
+              kubectl rollout status deployment/$SERVICE \
+                -n ${{ env.NAMESPACE }} --timeout=120s
+            fi
+          done
+
+      - name: Print final pod status
+        if: always()
+        run: kubectl get pods -n ${{ env.NAMESPACE }} -o wide

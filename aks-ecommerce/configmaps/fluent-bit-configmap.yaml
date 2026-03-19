@@ -1,0 +1,84 @@
+# ============================================================
+# fluent-bit-configmap.yaml
+# Fluent Bit configuration for log aggregation.
+# Sidecar in api-gateway reads app logs and ships them to
+# Azure Log Analytics (via HTTP output) and stdout.
+# ============================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: production
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Log_Level     info
+        Daemon        off
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+        # Metrics endpoint for Prometheus
+        storage.metrics on
+
+    [INPUT]
+        Name              tail
+        Path              /app/logs/*.log
+        Parser            json
+        Tag               app.logs
+        Refresh_Interval  5
+        Mem_Buf_Limit     10MB
+        Skip_Long_Lines   On
+        DB                /tmp/flb_kube.db
+
+    [INPUT]
+        Name   systemd
+        Tag    host.*
+        Max_Entries 1000
+
+    [FILTER]
+        Name   record_modifier
+        Match  app.logs
+        Record pod_name ${POD_NAME}
+        Record namespace ${POD_NAMESPACE}
+        Record cluster aks-ecommerce-prod
+
+    [FILTER]
+        Name   grep
+        Match  app.logs
+        # Drop health check logs to reduce noise
+        Exclude log /healthz
+        Exclude log /readyz
+        Exclude log /metrics
+
+    [OUTPUT]
+        Name   stdout
+        Match  *
+        Format json_lines
+
+    # Send to Azure Log Analytics
+    # [OUTPUT]
+    #     Name              azure
+    #     Match             *
+    #     Customer_ID       <log-analytics-workspace-id>
+    #     Shared_Key        <log-analytics-shared-key>
+    #     Log_Type          AKSEcommerceLogs
+    #     time_key          @timestamp
+    #     time_raise_error  false
+
+  parsers.conf: |
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+        Time_Keep   On
+
+    [PARSER]
+        Name        nginx
+        Format      regex
+        Regex       ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
+        Time_Key    time
+        Time_Format %d/%b/%Y:%H:%M:%S %z

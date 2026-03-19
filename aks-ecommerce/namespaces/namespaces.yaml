@@ -1,0 +1,141 @@
+# ============================================================
+# namespaces.yaml
+# Production namespaces with:
+#   - ResourceQuotas (hard limits per namespace)
+#   - LimitRanges (default container limits)
+#   - Pod Security Standards (restricted/baseline)
+# ============================================================
+
+# ── Namespace: production (all app services) ──────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    environment: production
+    # Pod Security Standard: restricted = most secure
+    # Prevents privileged containers, hostPath, etc.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Hard resource limits for the production namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-quota
+  namespace: production
+spec:
+  hard:
+    # Compute — test cluster has 1-4 B2s nodes (4-16 vCPU total)
+    requests.cpu: "4"               # was 20
+    requests.memory: 8Gi            # was 40Gi
+    limits.cpu: "8"                 # was 40
+    limits.memory: 16Gi             # was 80Gi
+    # Object counts
+    pods: "40"                      # was 100
+    services: "20"
+    secrets: "50"
+    configmaps: "50"
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "1"     # was 2 — LoadBalancers cost ~$18/month each
+    services.nodeports: "0"
+---
+# Default container resource limits (prevents OOM/CPU steal)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: production-limits
+  namespace: production
+spec:
+  limits:
+  - type: Container
+    default:              # applied when container sets NO limits
+      cpu: 200m           # was 500m — test pods are small
+      memory: 256Mi       # was 512Mi
+    defaultRequest:       # applied when container sets NO requests
+      cpu: 25m            # was 100m — VPA Auto will tune this up if needed
+      memory: 64Mi        # was 128Mi
+    max:                  # hard ceiling per container
+      cpu: "1"            # was 4 — no single test container needs 4 cores
+      memory: 1Gi         # was 4Gi
+    min:
+      cpu: 10m
+      memory: 32Mi
+  - type: Pod
+    max:
+      cpu: "2"            # was 8
+      memory: 2Gi         # was 8Gi
+  - type: PersistentVolumeClaim
+    max:
+      storage: 20Gi       # was 100Gi — test DBs use 5Gi disks
+    min:
+      storage: 1Gi
+---
+# ── Namespace: databases ──────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+  labels:
+    environment: production
+    # Databases need slightly relaxed security (need to write to disk)
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: databases-quota
+  namespace: databases
+spec:
+  hard:
+    requests.cpu: "2"             # was 8
+    requests.memory: 4Gi          # was 16Gi
+    limits.cpu: "4"               # was 16
+    limits.memory: 8Gi            # was 32Gi
+    pods: "10"                    # was 20
+    persistentvolumeclaims: "10"  # was 20
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+---
+# ── Namespace: monitoring ─────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    environment: production
+    pod-security.kubernetes.io/enforce: baseline
+---
+# ── Namespace: ingress-nginx ──────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    pod-security.kubernetes.io/enforce: privileged  # nginx needs host ports
+---
+# ── Namespace: staging ────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    environment: staging
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: staging-quota
+  namespace: staging
+spec:
+  hard:
+    requests.cpu: "1"     # was 4
+    requests.memory: 2Gi  # was 8Gi
+    limits.cpu: "2"       # was 8
+    limits.memory: 4Gi    # was 16Gi
+    pods: "20"            # was 50

@@ -1,0 +1,296 @@
+# ============================================================
+# network-policies.yaml
+# Zero-trust network model:
+#   - Default deny ALL traffic in production namespace
+#   - Explicitly allow only required communication paths
+#   - Databases only reachable from their consuming services
+# ============================================================
+
+# ── Default: DENY all ingress+egress in production ────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: production
+spec:
+  podSelector: {}         # Applies to all pods in namespace
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# ── Allow: DNS resolution (all pods need this) ────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+---
+# ── Allow: API Gateway ← Ingress Controller ───────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-api-gateway
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - port: 3000
+---
+# ── Allow: API Gateway → Microservices ────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-gateway-egress
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: user-service
+    ports:
+    - port: 3001
+  - to:
+    - podSelector:
+        matchLabels:
+          app: product-service
+    ports:
+    - port: 3002
+  - to:
+    - podSelector:
+        matchLabels:
+          app: order-service
+    ports:
+    - port: 3003
+  - to:
+    - podSelector:
+        matchLabels:
+          app: payment-service
+    ports:
+    - port: 3004
+  - to:
+    - podSelector:
+        matchLabels:
+          app: notification-service
+    ports:
+    - port: 3005
+---
+# ── Allow: Microservices ← API Gateway ────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-api-gateway
+  namespace: production
+spec:
+  podSelector:
+    matchLabels: {}    # All services
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+---
+# ── Allow: User Service → PostgreSQL ──────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-user-service-to-postgres
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: user-service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+      podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - port: 5432
+---
+# ── Allow: Product Service → MongoDB + Redis ──────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-product-service-egress
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: product-service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+      podSelector:
+        matchLabels:
+          app: mongodb
+    ports:
+    - port: 27017
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+      podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - port: 6379
+---
+# ── Allow: Order Service → Postgres + Redis + RabbitMQ ───
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-order-service-egress
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+    ports:
+    - port: 5432
+    - port: 6379
+    - port: 5672
+---
+# ── Allow: Payment Service → Postgres + RabbitMQ + Stripe ─
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-payment-service-egress
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+    ports:
+    - port: 5432
+    - port: 5672
+  # Allow outbound to Stripe API (internet)
+  - ports:
+    - port: 443
+      protocol: TCP
+---
+# ── Allow: Notification Service → RabbitMQ + SMTP ────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-notification-service-egress
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: notification-service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases
+    ports:
+    - port: 5672
+  # Allow SMTP to SendGrid/email provider
+  - ports:
+    - port: 587
+      protocol: TCP
+    - port: 465
+      protocol: TCP
+---
+# ── Allow: Prometheus scraping all pods ───────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - port: 3000
+    - port: 3001
+    - port: 3002
+    - port: 3003
+    - port: 3004
+    - port: 3005
+---
+# ── Default deny in databases namespace ───────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-databases
+  namespace: databases
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# ── Allow production services → databases ─────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-production-to-databases
+  namespace: databases
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: production

@@ -1,0 +1,188 @@
+# ============================================================
+# user-service/deployment.yaml
+# Demonstrates: Key Vault CSI volume, securityContext,
+#   probes, anti-affinity, topology spread
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: production
+  labels:
+    app: user-service
+spec:
+  replicas: 1   # was 2 — HPA will scale up if needed
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+        azure.workload.identity/use: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: user-service-sa
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: user-service
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nodepool-type
+                operator: In
+                values: ["user"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: user-service
+              topologyKey: kubernetes.io/hostname
+
+      # Init container: wait for postgres to be ready
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.36
+        command:
+        - /bin/sh
+        - -c
+        - |
+          until nc -z postgres.databases.svc.cluster.local 5432; do
+            echo "Waiting for PostgreSQL..."
+            sleep 3
+          done
+          echo "PostgreSQL is ready!"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+      containers:
+      - name: user-service
+        image: acrecommerceprod.azurecr.io/user-service:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 3001
+
+        envFrom:
+        - configMapRef:
+            name: user-service-config
+
+        # Secrets injected from Key Vault via CSI driver
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: user-service-kv-secrets
+              key: DB_PASSWORD
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: user-service-kv-secrets
+              key: JWT_SECRET
+
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 3001
+          failureThreshold: 30
+          periodSeconds: 5
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 3001
+          periodSeconds: 10
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 3001
+          periodSeconds: 5
+          failureThreshold: 3
+
+        resources:
+          requests:
+            cpu: 50m              # was 100m
+            memory: 64Mi          # was 128Mi
+          limits:
+            cpu: 200m             # was 500m
+            memory: 192Mi         # was 512Mi
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+        volumeMounts:
+        - name: secrets-store
+          mountPath: /mnt/secrets
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 5"]
+
+      volumes:
+      # Key Vault CSI volume — mounts secrets as files + syncs to K8s Secret
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: user-service-secrets
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: production
+  labels:
+    app: user-service
+spec:
+  selector:
+    app: user-service
+  ports:
+  - name: http
+    port: 3001
+    targetPort: 3001
+  type: ClusterIP

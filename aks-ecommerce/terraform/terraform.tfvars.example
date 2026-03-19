@@ -1,0 +1,52 @@
+# ============================================================
+# terraform.tfvars.example
+# Copy this to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to Git (contains passwords!)
+# ============================================================
+
+project     = "ecommerce"
+environment = "test"
+location    = "eastus"
+
+tags = {
+  environment   = "test"
+  project       = "ecommerce"
+  managed-by    = "terraform"
+  auto-shutdown = "true"
+}
+
+# ── Networking ────────────────────────────────────────────
+vnet_address_space  = "10.0.0.0/8"
+aks_subnet_prefix   = "10.240.0.0/16"
+appgw_subnet_prefix = "10.2.0.0/16"
+
+# ── AKS ───────────────────────────────────────────────────
+kubernetes_version = "1.32"
+node_vm_size       = "Standard_B2s"   # cheapest for test
+node_count         = 1
+min_count          = 1
+max_count          = 4
+spot_vm_size       = "Standard_B4ms"
+spot_max_count     = 5
+
+# ── ACR ───────────────────────────────────────────────────
+acr_name = "acrecommerceprod"   # must be globally unique!
+acr_sku  = "Basic"
+
+# ── Secrets (change these!) ───────────────────────────────
+secrets = {
+  postgres-password = "YourStrongPassword1!"
+  mongodb-password  = "YourStrongPassword2!"
+  redis-password    = "YourStrongPassword3!"
+  rabbitmq-password = "YourStrongPassword4!"
+  jwt-secret        = "YourJWTSecretKeyMin32CharsLong!!"
+  stripe-api-key    = "sk_test_your_actual_stripe_key"
+  smtp-password     = "YourSMTPPassword"
+}
+
+# ── cert-manager ──────────────────────────────────────────
+letsencrypt_email = "your-email@domain.com"
+
+# ── Auto-shutdown schedule (UTC) ──────────────────────────
+schedule_start_time = "07:55"
+schedule_stop_time  = "20:05"

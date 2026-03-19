@@ -1,0 +1,63 @@
+# ============================================================
+# storage-classes.yaml
+# Azure storage classes for different workload needs:
+#   - azure-disk-premium     → Databases (fast, RWO)
+#   - azure-files-premium    → Shared storage (RWX)
+#   - azure-disk-standard    → Dev/test (cheaper)
+# ============================================================
+
+# Premium SSD (ZRS = Zone Redundant Storage — survives zone failure)
+# NOT the default in test — only use explicitly for prod-like DB testing
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azure-disk-premium-zrs
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_ZRS        # Zone-redundant premium SSD
+  cachingmode: ReadOnly       # Best for read-heavy DB workloads
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer   # Ensures disk created in same AZ as pod
+reclaimPolicy: Retain                     # IMPORTANT: don't auto-delete data
+allowVolumeExpansion: true
+---
+# Standard SSD (LRS) — DEFAULT for test env (cheaper, no zone redundancy)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azure-disk-standard
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"  # was false in prod
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: StandardSSD_LRS   # ~half the price of Premium_ZRS
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete        # auto-delete disks in test — no orphaned cost
+allowVolumeExpansion: true
+---
+# Azure Files Standard (LRS) — for shared RWX storage in test
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azure-files-standard
+provisioner: file.csi.azure.com
+parameters:
+  skuName: Standard_LRS     # was Premium_LRS — ~70% cheaper
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+- dir_mode=0777
+- file_mode=0777
+- uid=1001
+- gid=1001
+mountOptions:
+- mfsymlinks
+- cache=strict
+- nosharesock
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+allowVolumeExpansion: true

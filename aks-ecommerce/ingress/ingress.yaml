@@ -1,0 +1,87 @@
+# ============================================================
+# ingress.yaml
+# NGINX Ingress with:
+#   - TLS via cert-manager (Let's Encrypt)
+#   - Rate limiting annotations
+#   - CORS headers
+#   - Path-based routing
+# ============================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce-ingress
+  namespace: production
+  annotations:
+    # Ingress class
+    kubernetes.io/ingress.class: nginx
+    # cert-manager: use STAGING issuer — avoids Let's Encrypt rate limits in test
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    # NGINX rate limiting — relaxed for test traffic
+    nginx.ingress.kubernetes.io/limit-rps: "200"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    # Body size limit
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # Enable CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"   # was fixed domain — open in test
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+    # TEST: HTTP allowed — local port-forward and test tools don't use TLS
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    # Sticky sessions (useful for stateful backends)
+    # nginx.ingress.kubernetes.io/affinity: "cookie"
+    # nginx.ingress.kubernetes.io/session-cookie-name: "SERVERID"
+spec:
+  tls:
+  - hosts:
+    - ecommerce.yourdomain.com
+    - api.ecommerce.yourdomain.com
+    secretName: ecommerce-tls-cert
+  rules:
+  # Frontend
+  - host: ecommerce.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              number: 80
+  # API (all microservices via API Gateway)
+  - host: api.ecommerce.yourdomain.com
+    http:
+      paths:
+      - path: /api/v1
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80
+      - path: /healthz
+        pathType: Exact
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80

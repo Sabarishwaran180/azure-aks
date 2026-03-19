@@ -1,0 +1,265 @@
+# ============================================================
+# postgres-statefulset.yaml
+# Production PostgreSQL with:
+#   - StatefulSet for stable network identity
+#   - Init container for custom config
+#   - Azure Premium ZRS disk
+#   - Liveness + Readiness probes
+#   - Pod Anti-Affinity (pods spread across AZs)
+#   - Pod Disruption Budget
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: databases
+  labels:
+    app: postgres
+spec:
+  # Headless service: each pod gets DNS: postgres-0.postgres.databases.svc.cluster.local
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+---
+# Client-facing service (load balances across read replicas in future)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-read
+  namespace: databases
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: databases
+  labels:
+    app: postgres
+    version: "15"
+spec:
+  serviceName: postgres
+  replicas: 1                 # Scale to 3 for HA with Patroni/Citus
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        version: "15"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      terminationGracePeriodSeconds: 60
+
+      # ── Security Context ──────────────────────────────
+      securityContext:
+        runAsUser: 999        # postgres user
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+
+      # ── Pod Anti-Affinity: spread across nodes ────────
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: postgres
+            topologyKey: kubernetes.io/hostname
+
+      # ── Init Container: create multiple databases ─────
+      initContainers:
+      - name: postgres-init
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Init: will create users_db, orders_db, payments_db on first run"
+          # The actual DB creation is done via POSTGRES_MULTIPLE_DATABASES env var
+          # handled by init scripts mounted below
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+      containers:
+      # ── Main Postgres container ────────────────────────
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+
+        # Environment from ConfigMap + Key Vault secret
+        env:
+        - name: POSTGRES_USER
+          value: "appuser"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_MULTIPLE_DATABASES
+          value: "users_db,orders_db,payments_db"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+
+        resources:
+          requests:
+            cpu: 50m              # was 250m — test DB is lightly used
+            memory: 128Mi         # was 512Mi
+          limits:
+            cpu: 500m             # was 2
+            memory: 512Mi         # was 2Gi
+
+        # ── Probes ────────────────────────────────────────
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+          successThreshold: 1
+
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+
+        startupProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+
+      # ── Sidecar: postgres_exporter for Prometheus ─────
+      - name: postgres-exporter
+        image: prometheuscommunity/postgres-exporter:v0.15.0
+        ports:
+        - containerPort: 9187
+          name: metrics
+        env:
+        - name: DATA_SOURCE_NAME
+          value: "postgresql://appuser:$(POSTGRES_PASSWORD)@localhost:5432/postgres?sslmode=disable"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: postgres-init-scripts
+
+  # ── Persistent Volume (Azure Premium ZRS disk) ────────
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: azure-disk-standard   # was azure-disk-premium-zrs
+      resources:
+        requests:
+          storage: 5Gi          # was 20Gi
+---
+# Init script to create multiple databases
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: databases
+data:
+  01-create-databases.sh: |
+    #!/bin/bash
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+      CREATE DATABASE users_db;
+      CREATE DATABASE orders_db;
+      CREATE DATABASE payments_db;
+      GRANT ALL PRIVILEGES ON DATABASE users_db TO $POSTGRES_USER;
+      GRANT ALL PRIVILEGES ON DATABASE orders_db TO $POSTGRES_USER;
+      GRANT ALL PRIVILEGES ON DATABASE payments_db TO $POSTGRES_USER;
+    EOSQL
+---
+# Secret (in production this would come from Key Vault CSI driver)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: databases
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "SuperSecret123!"   # Use Key Vault in real production!
+---
+# Pod Disruption Budget: always keep at least 1 postgres pod running
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: databases
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres

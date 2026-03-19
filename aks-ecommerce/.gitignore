@@ -1,0 +1,41 @@
+# ── Visual Studio / VS Code ─────────────────────────────
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ── OS ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Terraform ───────────────────────────────────────────
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.backup
+**/*.tfstate.lock.info
+**/.terraform.lock.hcl
+**/terraform.tfvars
+**/crash.log
+**/override.tf
+**/override.tf.json
+**/*_override.tf
+
+# ── Docker ──────────────────────────────────────────────
+*.env
+.env.*
+!.env.example
+
+# ── Binaries ────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ── Secrets / credentials ───────────────────────────────
+*.pem
+*.key
+kubeconfig
+*kubeconfig*
