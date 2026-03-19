@@ -1,7 +1,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npm run build
 
@@ -13,7 +13,6 @@ RUN addgroup -g 1001 -S nginxgroup && adduser -S nginxuser -u 1001 -G nginxgroup
 
 # Copy build artifacts
 COPY --from=builder /app/build /usr/share/nginx/html
-# nginx config will be mounted from ConfigMap
 COPY nginx.conf /etc/nginx/nginx.conf
 
 # Fix permissions
@@ -23,9 +22,9 @@ RUN chown -R nginxuser:nginxgroup /usr/share/nginx/html /var/cache/nginx /var/lo
     && chown nginxuser:nginxgroup /var/run/nginx.pid
 
 USER nginxuser
-EXPOSE 80
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost/healthz || exit 1
+  CMD wget -qO- http://localhost:8080/healthz || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

@@ -44,8 +44,6 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "3000"
         prometheus.io/path: "/metrics"
-        # Force pod restart when configmap changes (checksum trick)
-        checksum/config: "{{ .Values.configChecksum }}"
     spec:
       serviceAccountName: api-gateway-sa
       terminationGracePeriodSeconds: 30

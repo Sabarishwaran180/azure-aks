@@ -104,6 +104,20 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           echo "value=${{ github.run_number }}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
+      # ── Generate package-lock.json if missing ──────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate package-lock.json if missing
+        run: |
+          SERVICE_PATH="aks-ecommerce/services/${{ matrix.service }}"
+          if [ -f "$SERVICE_PATH/package.json" ] && [ ! -f "$SERVICE_PATH/package-lock.json" ]; then
+            echo "⚠️  No package-lock.json found for ${{ matrix.service }} — generating one."
+            npm install --package-lock-only --prefix "$SERVICE_PATH"
+          fi
+
       # ── Build (skip if no Dockerfile) ──────────────────
       - name: Build ${{ matrix.service }}
         id: build
@@ -315,7 +329,7 @@ jobs:
             PF_PID=$!
             sleep 2
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              http://localhost:9${PORT}/health 2>/dev/null || echo "000")
+              http://localhost:9${PORT}/healthz 2>/dev/null || echo "000")
             kill $PF_PID 2>/dev/null || true
             if [[ "$HTTP_CODE" =~ ^(200|204)$ ]]; then
               echo "✅ $SERVICE /health → $HTTP_CODE"
