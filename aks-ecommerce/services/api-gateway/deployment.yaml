@@ -99,7 +99,7 @@ spec:
         - /bin/sh
         - -c
         - |
-          until nc -z user-service.production.svc.cluster.local 3001; do
+          until nc -z user-service 3001; do
             echo "Waiting for user-service..."
             sleep 2
           done

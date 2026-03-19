@@ -242,6 +242,7 @@ jobs:
             sed \
               -e "s|image:.*/$SERVICE:.*|image: $REGISTRY/$SERVICE:$TAG|g" \
               -e "s|namespace:.*|namespace: ${{ env.NAMESPACE }}|g" \
+              -e "s|\.production\.svc\.cluster\.local|.${{ env.NAMESPACE }}.svc.cluster.local|g" \
               "$MANIFEST" | kubectl apply -n ${{ env.NAMESPACE }} -f -
           done
 
