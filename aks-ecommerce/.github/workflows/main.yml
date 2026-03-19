@@ -242,7 +242,7 @@ jobs:
           echo "Waiting for databases to be ready..."
           for DB in postgres mongodb rabbitmq redis; do
             kubectl rollout status statefulset/$DB \
-              -n databases --timeout=300s
+              -n databases --timeout=600s
           done
 
       # ── Create test prerequisites ───────────────────────
