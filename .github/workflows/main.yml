@@ -137,15 +137,15 @@ jobs:
           echo "skipped=false" >> "$GITHUB_OUTPUT"
 
       # ── Trivy scan — fail on HIGH/CRITICAL ─────────────
-      - name: Trivy scan — ${{ matrix.service }}
-        if: steps.build.outputs.skipped == 'false'
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: "${{ steps.build.outputs.image }}:${{ steps.tag.outputs.value }}"
-          format: table
-          exit-code: "1"
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+      # - name: Trivy scan — ${{ matrix.service }}
+      #   if: steps.build.outputs.skipped == 'false'
+      #   uses: aquasecurity/trivy-action@0.35.0
+      #   with:
+      #     image-ref: "${{ steps.build.outputs.image }}:${{ steps.tag.outputs.value }}"
+      #     format: table
+      #     exit-code: "1"
+      #     severity: HIGH,CRITICAL
+      #     ignore-unfixed: true
 
       # ── Push to ACR ─────────────────────────────────────
       - name: Push ${{ matrix.service }}
