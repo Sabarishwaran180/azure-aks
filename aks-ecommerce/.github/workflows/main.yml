@@ -224,6 +224,55 @@ jobs:
             purpose=test \
             --overwrite
 
+      # ── Create test prerequisites ───────────────────────
+      - name: Create test prerequisites
+        run: |
+          # Satisfy nodeAffinity (nodepool-type: user) on all cluster nodes
+          kubectl label nodes --all nodepool-type=user --overwrite
+
+          # Service accounts
+          for SVC in api-gateway user-service product-service order-service payment-service notification-service frontend; do
+            kubectl create serviceaccount ${SVC}-sa \
+              -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          done
+
+          # ConfigMaps
+          for SVC in api-gateway user-service product-service order-service payment-service notification-service; do
+            kubectl create configmap ${SVC}-config \
+              -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          done
+          kubectl create configmap fluent-bit-config \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create configmap frontend-config \
+            --from-file=nginx.conf=aks-ecommerce/services/frontend/nginx.conf \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+          # Dummy secrets — pods won't connect to real backends in test,
+          # but Kubernetes won't create the pod if referenced keys are missing
+          kubectl create secret generic user-service-kv-secrets \
+            --from-literal=DB_PASSWORD=test \
+            --from-literal=JWT_SECRET=test-jwt-secret-for-ci \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic product-service-kv-secrets \
+            --from-literal=MONGODB_PASSWORD=test \
+            --from-literal=REDIS_PASSWORD=test \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic order-service-kv-secrets \
+            --from-literal=DB_PASSWORD=test \
+            --from-literal=REDIS_PASSWORD=test \
+            --from-literal=RABBITMQ_PASSWORD=test \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic payment-service-kv-secrets \
+            --from-literal=DB_PASSWORD=test \
+            --from-literal=STRIPE_API_KEY=sk_test_dummy_ci \
+            --from-literal=JWT_SECRET=test-jwt-secret-for-ci \
+            --from-literal=RABBITMQ_PASSWORD=test \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic notification-service-kv-secrets \
+            --from-literal=RABBITMQ_PASSWORD=test \
+            --from-literal=SMTP_PASSWORD=test \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
       # ── Deploy all services ─────────────────────────────
       - name: Deploy services
         run: |
@@ -236,12 +285,18 @@ jobs:
               continue
             fi
             echo "=== Deploying $SERVICE ==="
-            # Patch image tag + namespace inline (no file mutation on disk)
+            # Strip CSI secrets-store volumes (not present in test namespace)
+            # then patch image/namespace/scheduling inline
+            yq '
+              del(.. | select(has("csi"))) |
+              del(.spec.template.spec.containers[].volumeMounts[] | select(.name == "secrets-store"))
+            ' "$MANIFEST" | \
             sed \
               -e "s|image:.*/$SERVICE:.*|image: $REGISTRY/$SERVICE:$TAG|g" \
               -e "s|namespace:.*|namespace: ${{ env.NAMESPACE }}|g" \
               -e "s|\.production\.svc\.cluster\.local|.${{ env.NAMESPACE }}.svc.cluster.local|g" \
-              "$MANIFEST" | kubectl apply -n ${{ env.NAMESPACE }} -f -
+              -e "s|whenUnsatisfiable: DoNotSchedule|whenUnsatisfiable: ScheduleAnyway|g" | \
+            kubectl apply -n ${{ env.NAMESPACE }} -f -
           done
 
       # ── Wait for all deployments to be ready ───────────
