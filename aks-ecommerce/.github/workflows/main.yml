@@ -201,8 +201,7 @@ jobs:
     permissions:
       contents: read
     env:
-      # Each run gets its own namespace: test-42, test-43, ...
-      NAMESPACE: test-${{ github.run_number }}
+      NAMESPACE: test
 
     steps:
       - name: Checkout
@@ -223,7 +222,6 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
           kubectl label namespace ${{ env.NAMESPACE }} \
             purpose=test \
-            run=${{ github.run_number }} \
             --overwrite
 
       # ── Deploy all services ─────────────────────────────
@@ -272,7 +270,7 @@ jobs:
     permissions:
       contents: read
     env:
-      NAMESPACE: test-${{ github.run_number }}
+      NAMESPACE: test
 
     steps:
       - name: Checkout
@@ -352,7 +350,7 @@ jobs:
     permissions:
       contents: read
     env:
-      NAMESPACE: test-${{ github.run_number }}
+      NAMESPACE: test
 
     steps:
       - name: Configure kubectl
