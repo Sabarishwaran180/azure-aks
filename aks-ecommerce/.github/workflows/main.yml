@@ -224,6 +224,27 @@ jobs:
             purpose=test \
             --overwrite
 
+      # ── Ensure storage classes exist ─────────────────────
+      - name: Apply storage classes
+        run: |
+          kubectl apply -f aks-ecommerce/storage/storage-classes.yaml
+
+      # ── Deploy databases to shared databases namespace ───
+      - name: Deploy databases
+        run: |
+          kubectl create namespace databases \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace databases purpose=databases --overwrite
+          for DB in postgres mongodb rabbitmq redis; do
+            echo "=== Applying $DB ==="
+            kubectl apply -f "aks-ecommerce/databases/${DB}-statefulset.yaml"
+          done
+          echo "Waiting for databases to be ready..."
+          for DB in postgres mongodb rabbitmq redis; do
+            kubectl rollout status statefulset/$DB \
+              -n databases --timeout=300s
+          done
+
       # ── Create test prerequisites ───────────────────────
       - name: Create test prerequisites
         run: |
@@ -247,29 +268,29 @@ jobs:
             --from-file=nginx.conf=aks-ecommerce/services/frontend/nginx.conf \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-          # Dummy secrets — pods won't connect to real backends in test,
-          # but Kubernetes won't create the pod if referenced keys are missing
+          # Service secrets — match the credentials used by the databases
+          # in the databases namespace so services can actually connect
           kubectl create secret generic user-service-kv-secrets \
-            --from-literal=DB_PASSWORD=test \
+            --from-literal=DB_PASSWORD=SuperSecret123! \
             --from-literal=JWT_SECRET=test-jwt-secret-for-ci \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic product-service-kv-secrets \
-            --from-literal=MONGODB_PASSWORD=test \
-            --from-literal=REDIS_PASSWORD=test \
+            --from-literal=MONGODB_PASSWORD=MongoSecret456! \
+            --from-literal=REDIS_PASSWORD=RedisSecret789! \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic order-service-kv-secrets \
-            --from-literal=DB_PASSWORD=test \
-            --from-literal=REDIS_PASSWORD=test \
-            --from-literal=RABBITMQ_PASSWORD=test \
+            --from-literal=DB_PASSWORD=SuperSecret123! \
+            --from-literal=REDIS_PASSWORD=RedisSecret789! \
+            --from-literal=RABBITMQ_PASSWORD=RabbitSecret101! \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic payment-service-kv-secrets \
-            --from-literal=DB_PASSWORD=test \
+            --from-literal=DB_PASSWORD=SuperSecret123! \
             --from-literal=STRIPE_API_KEY=sk_test_dummy_ci \
             --from-literal=JWT_SECRET=test-jwt-secret-for-ci \
-            --from-literal=RABBITMQ_PASSWORD=test \
+            --from-literal=RABBITMQ_PASSWORD=RabbitSecret101! \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic notification-service-kv-secrets \
-            --from-literal=RABBITMQ_PASSWORD=test \
+            --from-literal=RABBITMQ_PASSWORD=RabbitSecret101! \
             --from-literal=SMTP_PASSWORD=test \
             -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
