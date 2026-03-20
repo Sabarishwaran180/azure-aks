@@ -114,6 +114,9 @@ jobs:
       - name: Create namespace
         run: kubectl apply -f ${{ env.APP_ROOT }}/k8s/namespace.yaml
 
+      - name: Apply Key Vault secret sync
+        run: kubectl apply -f ${{ env.APP_ROOT }}/k8s/app-data-secrets-kv.yaml
+
       - name: Resolve image tag
         id: image-tag
         run: |

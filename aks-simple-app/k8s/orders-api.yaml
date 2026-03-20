@@ -13,9 +13,36 @@ spec:
       labels:
         app: orders-api
     spec:
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: app-data-secrets-kv
       containers:
         - name: orders-api
           image: IMAGE_REGISTRY/orders-api:IMAGE_TAG
+          volumeMounts:
+            - name: secrets-store-inline
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          env:
+            - name: ORDERS_SQL_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: orders-sql-connection-string
+            - name: ORDERS_EVENTHUB_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: orders-eventhub-connection-string
+            - name: ORDERS_EVENTHUB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: orders-eventhub-name
           ports:
             - containerPort: 8000
           readinessProbe:

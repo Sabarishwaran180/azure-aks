@@ -13,9 +13,26 @@ spec:
       labels:
         app: products-api
     spec:
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: app-data-secrets-kv
       containers:
         - name: products-api
           image: IMAGE_REGISTRY/products-api:IMAGE_TAG
+          volumeMounts:
+            - name: secrets-store-inline
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          env:
+            - name: PRODUCTS_SQL_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: products-sql-connection-string
           ports:
             - containerPort: 8000
           readinessProbe:

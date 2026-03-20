@@ -1,12 +1,26 @@
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+from app.db import build_orders_repository
+from app.eventhub import EventHubPublisher
 
 app = FastAPI(title="Orders API", version="1.0.0")
+repository = build_orders_repository()
+publisher = EventHubPublisher()
 
-ORDERS = [
-    {"orderId": "ORD-1001", "status": "processing"},
-    {"orderId": "ORD-1002", "status": "shipped"},
-    {"orderId": "ORD-1003", "status": "delivered"},
-]
+
+class OrderCreate(BaseModel):
+    status: str = Field(default="processing", min_length=1, max_length=50)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    repository.initialize()
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    publisher.close()
 
 
 @app.get("/")
@@ -16,9 +30,21 @@ def root() -> dict[str, str]:
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "orders-api"}
+    return {
+        "status": "ok",
+        "service": "orders-api",
+        "storage": repository.storage_mode,
+        "eventing": publisher.mode,
+    }
 
 
 @app.get("/status")
 def order_status() -> dict[str, list[dict[str, str]]]:
-    return {"orders": ORDERS}
+    return {"orders": repository.list_orders()}
+
+
+@app.post("/orders", status_code=201)
+def create_order(order: OrderCreate) -> dict[str, str]:
+    created_order = repository.create_order(order.status)
+    publisher.publish_order_created(created_order)
+    return created_order
