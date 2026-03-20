@@ -28,6 +28,11 @@ on:
         required: false
         default: true
         type: boolean
+      image_tag:
+        description: "Existing image tag to deploy when build is skipped"
+        required: false
+        default: ""
+        type: string
 
 env:
   APP_ROOT: aks-simple-app
@@ -109,16 +114,36 @@ jobs:
       - name: Create namespace
         run: kubectl apply -f ${{ env.APP_ROOT }}/k8s/namespace.yaml
 
+      - name: Resolve image tag
+        id: image-tag
+        run: |
+          if [ "${{ inputs.run_build }}" != "true" ] && [ -z "${{ inputs.image_tag }}" ]; then
+            echo "image_tag is required when run_build is false."
+            exit 1
+          fi
+
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="${{ github.run_number }}-${GITHUB_SHA::7}"
+          fi
+
+          echo "Using image tag: $TAG"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Deploy services
         run: |
           REGISTRY="${{ secrets.ACR_LOGIN_SERVER }}"
-          TAG="${{ github.run_number }}-${GITHUB_SHA::7}"
+          TAG="${{ steps.image-tag.outputs.value }}"
           for SERVICE in ${{ env.SERVICES }}; do
             sed \
               -e "s|IMAGE_REGISTRY|$REGISTRY|g" \
               -e "s|IMAGE_TAG|$TAG|g" \
               "${{ env.APP_ROOT }}/k8s/$SERVICE.yaml" | kubectl apply -f -
           done
+
+      - name: Deploy ingress
+        run: kubectl apply -f ${{ env.APP_ROOT }}/k8s/ingress.yaml
 
       - name: Wait for rollouts
         run: |

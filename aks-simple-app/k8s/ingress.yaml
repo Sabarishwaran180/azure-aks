@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aks-sample-ingress
+  namespace: aks-learning
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: 20.231.247.12.sslip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
