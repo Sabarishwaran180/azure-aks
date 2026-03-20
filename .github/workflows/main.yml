@@ -142,8 +142,8 @@ jobs:
               "${{ env.APP_ROOT }}/k8s/$SERVICE.yaml" | kubectl apply -f -
           done
 
-      - name: Deploy ingress
-        run: kubectl apply -f ${{ env.APP_ROOT }}/k8s/ingress.yaml
+      - name: Remove ingress
+        run: kubectl delete ingress aks-sample-ingress -n ${{ env.NAMESPACE }} --ignore-not-found
 
       - name: Wait for rollouts
         run: |
