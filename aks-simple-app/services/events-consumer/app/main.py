@@ -28,12 +28,12 @@ class EventStore:
 
 class EventHubListener:
     def __init__(self) -> None:
-        self._connection_string = os.getenv("ORDERS_EVENTHUB_CONNECTION_STRING", "").strip()
-        self._eventhub_name = os.getenv("ORDERS_EVENTHUB_NAME", "").strip()
+        self._connection_string = os.getenv("EVENTS_EVENTHUB_CONNECTION_STRING", "").strip()
+        self._eventhub_name = os.getenv("EVENTS_EVENTHUB_NAME", "").strip()
         self._consumer_group = os.getenv("EVENTS_CONSUMER_GROUP", "$Default").strip()
         if not self._connection_string or not self._eventhub_name:
             raise RuntimeError(
-                "ORDERS_EVENTHUB_CONNECTION_STRING and ORDERS_EVENTHUB_NAME are required"
+                "EVENTS_EVENTHUB_CONNECTION_STRING and EVENTS_EVENTHUB_NAME are required"
             )
         self._client = EventHubConsumerClient.from_connection_string(
             conn_str=self._connection_string,

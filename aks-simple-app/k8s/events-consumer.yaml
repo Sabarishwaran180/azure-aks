@@ -28,12 +28,12 @@ spec:
               mountPath: /mnt/secrets-store
               readOnly: true
           env:
-            - name: ORDERS_EVENTHUB_CONNECTION_STRING
+            - name: EVENTS_EVENTHUB_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:
                   name: app-data-secrets
-                  key: orders-eventhub-connection-string
-            - name: ORDERS_EVENTHUB_NAME
+                  key: orders-eventhub-consumer-connection-string
+            - name: EVENTS_EVENTHUB_NAME
               valueFrom:
                 secretKeyRef:
                   name: app-data-secrets
