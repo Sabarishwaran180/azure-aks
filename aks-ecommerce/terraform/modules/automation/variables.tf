@@ -1,9 +1,0 @@
-variable "resource_group_name"  { type = string }
-variable "location"             { type = string }
-variable "project"              { type = string }
-variable "environment"          { type = string }
-variable "cluster_name"         { type = string }
-variable "subscription_id"      { type = string }
-variable "schedule_start_time"  { type = string }
-variable "schedule_stop_time"   { type = string }
-variable "tags"                 { type = map(string) }

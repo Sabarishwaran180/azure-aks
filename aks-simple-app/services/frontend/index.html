@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AKS Sample App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background: #f4f7fb;
+      color: #1f2937;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin-bottom: 0.5rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 1rem;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 1rem;
+    }
+    pre {
+      background: #111827;
+      color: #e5e7eb;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow: auto;
+      min-height: 180px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AKS Learning App</h1>
+    <p>Frontend on NGINX calling two FastAPI backend services through Kubernetes networking.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Products API</h2>
+        <button onclick="loadProducts()">Load Products</button>
+        <pre id="products-output">Click the button to call /api/products/items</pre>
+      </div>
+
+      <div class="card">
+        <h2>Orders API</h2>
+        <button onclick="loadOrders()">Load Orders</button>
+        <pre id="orders-output">Click the button to call /api/orders/status</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadProducts() {
+      const response = await fetch('/api/products/items');
+      const data = await response.json();
+      document.getElementById('products-output').textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function loadOrders() {
+      const response = await fetch('/api/orders/status');
+      const data = await response.json();
+      document.getElementById('orders-output').textContent = JSON.stringify(data, null, 2);
+    }
+  </script>
+</body>
+</html>
