@@ -6,7 +6,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: 4.157.136.211.sslip.io
+    - host: 4.157.136.211.nip.io
       http:
         paths:
           - path: /
