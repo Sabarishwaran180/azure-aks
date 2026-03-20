@@ -65,6 +65,7 @@
       <div class="card">
         <h2>Orders API</h2>
         <button onclick="loadOrders()">Load Orders</button>
+        <button onclick="placeOrder()">Place Order</button>
         <pre id="orders-output">Click the button to call /api/orders/status</pre>
       </div>
     </div>
@@ -81,6 +82,33 @@
       const response = await fetch('/api/orders/status');
       const data = await response.json();
       document.getElementById('orders-output').textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function placeOrder() {
+      const output = document.getElementById('orders-output');
+      output.textContent = 'Creating order and publishing event...';
+
+      const createResponse = await fetch('/api/orders/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: 'processing' })
+      });
+
+      const createData = await createResponse.json();
+      const ordersResponse = await fetch('/api/orders/status');
+      const ordersData = await ordersResponse.json();
+      const createdOrderId = createData.order.orderId;
+      const storedInDb = ordersData.orders.some(order => order.orderId === createdOrderId);
+
+      output.textContent = JSON.stringify({
+        orderCreated: createData.order,
+        publishedToEventHub: createData.publishedToEventHub,
+        eventHubName: createData.eventHubName,
+        storedInDb,
+        latestOrdersInDb: ordersData.orders
+      }, null, 2);
     }
   </script>
 </body>

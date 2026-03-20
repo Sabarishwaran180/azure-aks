@@ -44,7 +44,12 @@ def order_status() -> dict[str, list[dict[str, str]]]:
 
 
 @app.post("/orders", status_code=201)
-def create_order(order: OrderCreate) -> dict[str, str]:
+def create_order(order: OrderCreate) -> dict[str, object]:
     created_order = repository.create_order(order.status)
     publisher.publish_order_created(created_order)
-    return created_order
+    return {
+        "order": created_order,
+        "storedInDb": True,
+        "publishedToEventHub": True,
+        "eventHubName": publisher.eventhub_name,
+    }

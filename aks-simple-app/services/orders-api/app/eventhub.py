@@ -28,6 +28,10 @@ class EventHubPublisher:
     def mode(self) -> str:
         return "eventhub"
 
+    @property
+    def eventhub_name(self) -> str:
+        return self._eventhub_name
+
     def publish_order_created(self, order: dict[str, Any]) -> None:
         payload = json.dumps({"eventType": "order-created", "data": order})
         event_batch = self._client.create_batch()
