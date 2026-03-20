@@ -41,6 +41,7 @@ env:
     frontend
     products-api
     orders-api
+    events-consumer
 
 jobs:
   build:
@@ -56,6 +57,7 @@ jobs:
           - frontend
           - products-api
           - orders-api
+          - events-consumer
 
     steps:
       - name: Checkout

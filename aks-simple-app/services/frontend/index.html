@@ -13,7 +13,7 @@
       color: #1f2937;
     }
     .container {
-      max-width: 960px;
+      max-width: 1280px;
       margin: 0 auto;
     }
     h1 {
@@ -68,6 +68,12 @@
         <button onclick="placeOrder()">Place Order</button>
         <pre id="orders-output">Click the button to call /api/orders/status</pre>
       </div>
+
+      <div class="card">
+        <h2>Event Consumer API</h2>
+        <button onclick="loadEvents()">Load Event Stream</button>
+        <pre id="events-output">Click the button to call /api/events/events</pre>
+      </div>
     </div>
   </div>
 
@@ -84,9 +90,37 @@
       document.getElementById('orders-output').textContent = JSON.stringify(data, null, 2);
     }
 
+    async function loadEvents() {
+      const response = await fetch('/api/events/events');
+      const data = await response.json();
+      document.getElementById('events-output').textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function waitForEvent(orderId) {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const response = await fetch('/api/events/events');
+        const data = await response.json();
+        const eventReceived = data.events.some(event => event.data?.orderId === orderId);
+        if (eventReceived) {
+          return { eventReceived, events: data.events, eventHubName: data.eventHubName };
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      const response = await fetch('/api/events/events');
+      const data = await response.json();
+      return {
+        eventReceived: data.events.some(event => event.data?.orderId === orderId),
+        events: data.events,
+        eventHubName: data.eventHubName
+      };
+    }
+
     async function placeOrder() {
-      const output = document.getElementById('orders-output');
-      output.textContent = 'Creating order and publishing event...';
+      const ordersOutput = document.getElementById('orders-output');
+      const eventsOutput = document.getElementById('events-output');
+      ordersOutput.textContent = 'Creating order and publishing event...';
+      eventsOutput.textContent = 'Waiting for the event consumer to receive the Event Hub message...';
 
       const createResponse = await fetch('/api/orders/orders', {
         method: 'POST',
@@ -101,13 +135,20 @@
       const ordersData = await ordersResponse.json();
       const createdOrderId = createData.order.orderId;
       const storedInDb = ordersData.orders.some(order => order.orderId === createdOrderId);
+      const eventData = await waitForEvent(createdOrderId);
 
-      output.textContent = JSON.stringify({
+      ordersOutput.textContent = JSON.stringify({
         orderCreated: createData.order,
         publishedToEventHub: createData.publishedToEventHub,
         eventHubName: createData.eventHubName,
         storedInDb,
         latestOrdersInDb: ordersData.orders
+      }, null, 2);
+
+      eventsOutput.textContent = JSON.stringify({
+        receivedFromEventHub: eventData.eventReceived,
+        eventHubName: eventData.eventHubName,
+        latestEvents: eventData.events
       }, null, 2);
     }
   </script>
