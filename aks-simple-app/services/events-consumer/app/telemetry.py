@@ -16,10 +16,14 @@ def configure_telemetry(app: FastAPI, service_name: str) -> bool:
         return False
 
     os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
+    enable_live_metrics = os.getenv("APPLICATIONINSIGHTS_ENABLE_LIVE_METRICS", "true").lower() == "true"
 
     global _configured
     if not _configured:
-        configure_azure_monitor(connection_string=connection_string)
+        configure_azure_monitor(
+            connection_string=connection_string,
+            enable_live_metrics=enable_live_metrics,
+        )
         LoggingInstrumentor().instrument(set_logging_format=True)
         _configured = True
 

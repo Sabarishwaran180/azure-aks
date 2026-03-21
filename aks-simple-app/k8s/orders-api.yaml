@@ -48,6 +48,8 @@ spec:
                 secretKeyRef:
                   name: app-data-secrets
                   key: appinsights-connection-string
+            - name: APPLICATIONINSIGHTS_ENABLE_LIVE_METRICS
+              value: "true"
             - name: OTEL_SERVICE_NAME
               value: orders-api
           ports:
