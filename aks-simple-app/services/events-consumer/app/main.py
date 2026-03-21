@@ -8,8 +8,14 @@ from typing import Any
 
 from azure.eventhub import EventHubConsumerClient
 from fastapi import FastAPI
+from opentelemetry import trace
+from opentelemetry.propagate import extract
+
+from app.telemetry import configure_telemetry
 
 app = FastAPI(title="Events Consumer API", version="1.0.0")
+telemetry_enabled = configure_telemetry(app, "events-consumer")
+tracer = trace.get_tracer(__name__)
 
 
 class EventStore:
@@ -79,21 +85,32 @@ class EventHubListener:
                 raise
 
     def _on_event(self, partition_context: Any, event: Any) -> None:
-        payload = event.body_as_str(encoding="UTF-8")
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            data = {"raw": payload}
-        self._store.add(
-            {
-                "partitionId": partition_context.partition_id,
-                "sequenceNumber": event.sequence_number,
-                "offset": event.offset,
-                "enqueuedTime": event.enqueued_time.isoformat(),
-                "data": data.get("data", data),
-                "eventType": data.get("eventType", "unknown"),
-            }
-        )
+        properties = _decode_properties(getattr(event, "properties", None) or {})
+        context = extract(properties)
+        with tracer.start_as_current_span("eventhub.consume order-created", context=context) as span:
+            span.set_attribute("messaging.system", "eventhubs")
+            span.set_attribute("messaging.destination", self._eventhub_name)
+            span.set_attribute("messaging.operation", "process")
+            span.set_attribute("messaging.event_hubs.partition_id", partition_context.partition_id)
+            payload = event.body_as_str(encoding="UTF-8")
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                data = {"raw": payload}
+            event_data = data.get("data", data)
+            if isinstance(event_data, dict) and "orderId" in event_data:
+                span.set_attribute("order.id", event_data["orderId"])
+            self._store.add(
+                {
+                    "partitionId": partition_context.partition_id,
+                    "sequenceNumber": event.sequence_number,
+                    "offset": event.offset,
+                    "enqueuedTime": event.enqueued_time.isoformat(),
+                    "data": event_data,
+                    "eventType": data.get("eventType", "unknown"),
+                    "traceparent": properties.get("traceparent"),
+                }
+            )
 
 
 listener = EventHubListener()
@@ -121,6 +138,7 @@ def healthz() -> dict[str, str]:
         "service": "events-consumer",
         "eventHubName": listener.eventhub_name,
         "consumerGroup": listener.consumer_group,
+        "telemetry": "enabled" if telemetry_enabled else "disabled",
     }
 
 
@@ -131,3 +149,12 @@ def get_events() -> dict[str, object]:
         "consumerGroup": listener.consumer_group,
         "events": listener.events(),
     }
+
+
+def _decode_properties(properties: dict[Any, Any]) -> dict[str, str]:
+    decoded: dict[str, str] = {}
+    for key, value in properties.items():
+        decoded_key = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+        decoded_value = value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        decoded[decoded_key] = decoded_value
+    return decoded

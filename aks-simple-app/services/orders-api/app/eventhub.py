@@ -5,6 +5,11 @@ import os
 from typing import Any
 
 from azure.eventhub import EventData, EventHubProducerClient
+from opentelemetry import trace
+from opentelemetry.propagate import inject
+
+
+tracer = trace.get_tracer(__name__)
 
 
 class EventHubPublisher:
@@ -33,10 +38,19 @@ class EventHubPublisher:
         return self._eventhub_name
 
     def publish_order_created(self, order: dict[str, Any]) -> None:
-        payload = json.dumps({"eventType": "order-created", "data": order})
-        event_batch = self._client.create_batch()
-        event_batch.add(EventData(payload))
-        self._client.send_batch(event_batch)
+        with tracer.start_as_current_span("eventhub.publish order-created") as span:
+            span.set_attribute("messaging.system", "eventhubs")
+            span.set_attribute("messaging.destination", self._eventhub_name)
+            span.set_attribute("messaging.operation", "publish")
+            span.set_attribute("order.id", order["orderId"])
+            carrier: dict[str, str] = {}
+            inject(carrier)
+            payload = json.dumps({"eventType": "order-created", "data": order})
+            event = EventData(payload)
+            event.properties = {"orderId": order["orderId"], **carrier}
+            event_batch = self._client.create_batch()
+            event_batch.add(event)
+            self._client.send_batch(event_batch)
 
     def close(self) -> None:
         self._client.close()

@@ -40,6 +40,13 @@ spec:
                   key: orders-eventhub-name
             - name: EVENTS_CONSUMER_GROUP
               value: "$Default"
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: appinsights-connection-string
+            - name: OTEL_SERVICE_NAME
+              value: events-consumer
           ports:
             - containerPort: 8000
           readinessProbe:

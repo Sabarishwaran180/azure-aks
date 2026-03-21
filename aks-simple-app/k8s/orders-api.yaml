@@ -43,6 +43,13 @@ spec:
                 secretKeyRef:
                   name: app-data-secrets
                   key: orders-eventhub-name
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-data-secrets
+                  key: appinsights-connection-string
+            - name: OTEL_SERVICE_NAME
+              value: orders-api
           ports:
             - containerPort: 8000
           readinessProbe:

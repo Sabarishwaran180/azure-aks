@@ -21,6 +21,10 @@ class SqlOrdersRepository:
     def __init__(self, connection_string: str) -> None:
         self._engine = _create_engine(connection_string)
 
+    @property
+    def engine(self) -> Engine:
+        return self._engine
+
     def initialize(self) -> None:
         with self._engine.begin() as connection:
             connection.execute(
